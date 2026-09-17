@@ -1,626 +1,166 @@
-# Codex Implementation Plan: SVG Keyboard / Progression Renderer
+# Codex Implementation Plan: Keyboard Graphics Renderer
 
 ## Goal
 
-Build a small, deterministic HTTP service that generates complete keyboard teaching graphics as **SVG** from a single **GET URL**.
+Maintain a small, deterministic HTTP service that generates complete piano-keyboard teaching graphics from a single GET URL.
 
-The service should be suitable for URLs that can be opened directly in a browser, embedded in an `<img>`, cached by a CDN, or shared with someone else.
+The canonical renderer produces SVG. PNG is derived from that SVG rather than having a separate drawing implementation.
 
-The primary use case is generating a whole image containing:
+The application is stateless, Dockerized, cacheable, and suitable for browser links, `<img>` embeds, lesson graphics, and small API-driven experiments.
 
-- optional title
-- optional subtitle
-- one or more piano keyboard diagrams
-- a label/title for each diagram (for example a chord name)
-- explicitly highlighted notes on each keyboard
-- optional separate left-hand and right-hand note groups
-- optional emphasized notes/common tones
-- optional note names
+## Current HTTP API
 
-The renderer must be **deterministic**. Do not use AI/image generation. Piano geometry and note positions must always be musically correct.
-
-The application must run in **Docker**.
-
----
-
-## V1 scope
-
-Keep V1 intentionally small.
-
-Implement:
-
-1. One GET endpoint that returns SVG.
-2. Multiple keyboard diagrams in one response.
-3. Explicit notes supplied by the caller; do **not** implement chord-to-voicing intelligence yet.
-4. Correct piano geometry for arbitrary sensible note ranges.
-5. Automatic document height based on the number of diagrams.
-6. Optional left-hand/right-hand grouping.
-7. Optional emphasized/common notes.
-8. Labels and titles.
-9. Docker image and `docker compose` setup.
-10. Basic tests for note parsing, keyboard geometry, query parsing, and SVG output.
-
-Do **not** add a database, authentication, frontend framework, persistent storage, PNG rendering, MIDI playback, chord recognition, or a POST API in V1.
-
----
-
-## Suggested stack
-
-Use **Node.js + TypeScript**.
-
-Prefer a very small HTTP framework such as Fastify or Express. Fastify is preferred, but avoid unnecessary dependencies.
-
-Generate SVG directly as XML/text. Do not use Canvas or a headless browser to draw the keyboard.
-
-Suggested project structure:
-
-```text
-/
-  src/
-    server.ts
-    render.ts
-    keyboard.ts
-    notes.ts
-    query.ts
-    types.ts
-  test/
-    notes.test.ts
-    keyboard.test.ts
-    query.test.ts
-    render.test.ts
-  Dockerfile
-  compose.yml
-  package.json
-  tsconfig.json
-  README.md
-```
-
-The exact structure may be adjusted if there is a good reason.
-
----
-
-## HTTP API
-
-### Endpoint
+### Render endpoint
 
 ```http
-GET /render.svg
+GET /render
 ```
 
-Return:
+Output is selected with the optional `format` query parameter:
+
+```text
+format=svg   # default
+format=png
+```
+
+Examples:
+
+```text
+/render?title=C%20major&chords=C&notes=C4,E4,G4
+/render?format=svg&title=C%20major&chords=C&notes=C4,E4,G4
+/render?format=png&title=C%20major&chords=C&notes=C4,E4,G4
+```
+
+The previous `/render.svg` route is intentionally not retained.
+
+SVG responses use:
 
 ```http
 Content-Type: image/svg+xml; charset=utf-8
 ```
 
-Because rendering is deterministic from the URL, add a cache header such as:
+PNG responses use:
+
+```http
+Content-Type: image/png
+```
+
+Both formats should keep:
 
 ```http
 Cache-Control: public, max-age=86400
+X-Content-Type-Options: nosniff
 ```
 
-We can increase cache duration later.
+`GET /render` with no query parameters returns the plain-text API help. `GET /health` returns service health.
 
-Also provide a trivial health endpoint:
+## Rendering architecture
 
-```http
-GET /health
-```
-
-returning `200 OK`.
-
----
-
-## Query format
-
-V1 should be easy for humans to construct by hand.
-
-Example:
+Keep one source of truth for layout and piano geometry:
 
 ```text
-/render.svg?title=Everything%20In%20Its%20Right%20Place&subtitle=Main%20keyboard%20voicings&from=C3&to=C5&chords=C|Dbmaj7|Eb6&lh=C3,G3|Db3,Ab3|Eb3,Bb3&rh=C4,E4,G4|C4,F4,Ab4|C4,G4,Bb4&emphasize=C4
+query parameters
+    -> validation / RenderRequest
+    -> renderSvg(RenderRequest)
+    -> SVG string
+          |-> return SVG directly
+          `-> rasterize SVG -> PNG
 ```
 
-Interpret pipe `|` as the separator between diagrams and comma `,` as the separator between notes within one diagram.
+Do not implement a second PNG renderer. Any visual/layout change belongs in the SVG renderer and should therefore appear in both output formats automatically.
 
-### Parameters
+The Docker runtime provides `rsvg-convert` for rasterization. Local PNG development requires the same executable; SVG development has no extra system dependency.
 
-#### `title`
+## Query parameters
 
-Optional overall title.
+Supported recognized parameters:
 
-#### `subtitle`
+- `format`: `svg` or `png`, default `svg`
+- `title`: optional overall title
+- `subtitle`: optional subtitle
+- `from`: lowest displayed note, default `C3`
+- `to`: highest displayed note, default `C5`
+- `chords`: pipe-separated diagram display labels
+- `notes`: generic highlighted note groups
+- `lh`: left-hand note groups
+- `rh`: right-hand note groups
+- `emphasize`: emphasized/common-tone groups
+- `labels`: `true`, `false`, `1`, or `0`
 
-Optional overall subtitle.
+Use `|` between diagrams and `,` between notes. Explicit notes remain caller-supplied; chord labels do not create voicings.
 
-#### `from`
+Unknown query parameters are ignored so external systems may append tracking/share parameters such as `utm_source`. Recognized duplicate parameters and malformed recognized values must still fail with HTTP 400.
 
-Lowest note shown on every keyboard.
+## Correctness requirements
 
-Default:
+Piano geometry is the highest-priority invariant. White notes are C D E F G A B and black keys only occur between C-D, D-E, F-G, G-A, and A-B, giving the repeating 2-black / 3-black pattern.
 
-```text
-C3
-```
+Derive geometry from pitch classes and white-key indices. Never use image generation or guessed percentages. The renderer must work when the visible range begins or ends on a black key.
 
-#### `to`
+All caller-provided text inserted into SVG must be XML escaped. Preserve practical limits on title length, diagram count, note count, keyboard range, and encoded query size.
 
-Highest note shown on every keyboard.
+## Editor
 
-Default:
+`/editor` is the browser UI. It should generate `/render?...` URLs, using default SVG unless a future editor format selector is deliberately added.
 
-```text
-C5
-```
-
-#### `chords`
-
-Pipe-separated diagram labels.
-
-Example:
-
-```text
-C|Dbmaj7|Eb6
-```
-
-Despite the parameter name, V1 treats these as **display labels only**. Do not derive notes from them.
-
-#### `notes`
-
-Optional generic highlighted notes if hand grouping is not needed.
-
-Example:
-
-```text
-C3,G3,C4,E4,G4|Db3,Ab3,C4,F4,Ab4
-```
-
-#### `lh`
-
-Optional pipe-separated left-hand note groups.
-
-Example:
-
-```text
-C3,G3|Db3,Ab3|Eb3,Bb3
-```
-
-#### `rh`
-
-Optional pipe-separated right-hand note groups.
-
-Example:
-
-```text
-C4,E4,G4|C4,F4,Ab4|C4,G4,Bb4
-```
-
-#### `emphasize`
-
-Optional notes to visually emphasize.
-
-For V1, allow one comma-separated set applied to every diagram:
-
-```text
-C4
-```
-
-If easy to support without complicating the parser, pipe-separated per-diagram emphasis is acceptable too.
-
-#### `labels`
-
-Optional boolean controlling note-name labels.
-
-Default:
-
-```text
-true
-```
-
-Accept `true`, `false`, `1`, and `0`.
-
----
-
-## Example request
-
-This should produce a single vertical teaching graphic containing three keyboards:
-
-```text
-/render.svg?title=Everything%20In%20Its%20Right%20Place&subtitle=Main%20keyboard%20voicings&from=C3&to=C5&chords=C|Dbmaj7|Eb6&lh=C3,G3|Db3,Ab3|Eb3,Bb3&rh=C4,E4,G4|C4,F4,Ab4|C4,G4,Bb4&emphasize=C4
-```
-
-Diagram data represented by that URL:
-
-```text
-C
-LH: C3 G3
-RH: C4 E4 G4
-
-Dbmaj7
-LH: Db3 Ab3
-RH: C4 F4 Ab4
-
-Eb6
-LH: Eb3 Bb3
-RH: C4 G4 Bb4
-
-Common/emphasized note: C4
-```
-
----
-
-## Note parser
-
-Internally convert every note to a MIDI-style integer.
-
-Support at minimum:
-
-```text
-C3
-Db3
-D3
-Eb3
-E3
-F3
-Gb3
-G3
-Ab3
-A3
-Bb3
-B3
-```
-
-Also support sharps, e.g. `C#4`, even if examples primarily use flats.
-
-Enharmonic notes must map to the same pitch:
-
-```text
-Db4 == C#4
-Eb4 == D#4
-```
-
-Preserve the caller's spelling when displaying an explicitly supplied label where practical.
-
-Reject malformed notes with HTTP 400 rather than silently guessing.
-
-Have dedicated functions along the lines of:
-
-```ts
-parseNote("Db4") -> 61
-isBlackKey(61) -> true
-formatNote(61) -> "Db4" // formatting policy may be configurable later
-```
-
-Keep music/note logic independent from SVG rendering.
-
----
-
-## Piano geometry
-
-This is the most important correctness requirement.
-
-White-key pitch classes are:
-
-```text
-C D E F G A B
-```
-
-Black keys exist only between:
-
-```text
-C-D
-D-E
-F-G
-G-A
-A-B
-```
-
-Therefore the visible pattern must always be:
-
-```text
-2 black keys, gap, 3 black keys, gap
-```
-
-Do not position keys by guessing percentages from note names. Derive positions from pitch classes / white-key indices.
-
-Recommended approach:
-
-1. Enumerate every semitone between `from` and `to`.
-2. Determine which are white notes.
-3. Give white notes sequential integer positions.
-4. Draw white keys first.
-5. Position black keys at the boundary between their adjacent white keys.
-6. Draw black keys second so they appear above white keys.
-7. Overlay highlights and labels appropriately.
-
-The renderer should work correctly when the range starts or ends on either a white or black note.
-
-Write unit tests specifically verifying the repeating black-key pattern.
-
----
-
-## SVG layout
-
-Use one root `<svg>` containing the complete graphic.
-
-Suggested defaults:
-
-```text
-width: 1200px
-background: white
-```
-
-Height should be calculated automatically:
-
-```text
-header height
-+ diagram count * diagram block height
-+ footer/padding
-```
-
-Each diagram block should contain:
-
-1. chord/diagram title
-2. keyboard
-3. optional hand/note legend beneath it
-
-Use generous spacing and rounded/light panel backgrounds if useful, similar to a clean educational infographic.
-
-Do not hard-code a three-diagram layout.
-
-One diagram and ten diagrams must both render correctly.
-
----
-
-## Colours
-
-Use sensible defaults but keep them centralized as constants/theme values.
-
-For example:
-
-```text
-white key: white
-black key: near-black
-left hand: blue
-right hand: warm red/pink
-generic highlight: amber or blue
-emphasized/common tone: stronger red/accent
-text: near-black
-secondary text: gray
-panel: very light gray
-```
-
-Exact colours are not important in V1. Maintain sufficient contrast and readability.
-
-If a note belongs to a hand group and is also emphasized, emphasis should win visually while the legend still makes its hand membership clear.
-
----
-
-## Labels
-
-When `labels=true`, label highlighted notes directly on or near their keys.
-
-Prefer labels such as:
-
-```text
-C3
-Db3
-C4
-```
-
-Avoid labeling every chromatic key if that makes the graphic cluttered. The initial renderer can label highlighted notes plus useful octave/reference C notes.
-
-Below each keyboard, if hand groups were provided, automatically render something similar to:
-
-```text
-LH: C–G       RH: C–E–G
-```
-
-Use pitch names without octave numbers in this summary.
-
----
-
-## XML safety
-
-All caller-provided strings inserted into SVG must be XML escaped.
-
-This includes:
-
-- title
-- subtitle
-- chord/diagram labels
-- any future captions
-
-Never concatenate unescaped user text into SVG markup.
-
-Set reasonable maximum lengths and maximum diagram counts so a malicious query cannot generate an enormous response.
-
-Suggested V1 limits:
-
-```text
-max diagrams: 16
-max title: 120 chars
-max subtitle: 200 chars
-max keyboard span: 88 keys / standard piano range
-```
-
-Return HTTP 400 with a small text or JSON error for invalid requests.
-
----
+The editor may analyze selected notes and suggest chord names, but the HTTP rendering API itself remains deterministic and does not infer notes from chord labels.
 
 ## Docker
 
-The application must be runnable with:
+The application must run with:
 
 ```bash
 docker compose up --build
 ```
 
-Then:
+The runtime image must include `rsvg-convert` so PNG works without any application-level npm rasterization dependency.
+
+Expected URLs:
 
 ```text
+http://localhost:3000/editor
 http://localhost:3000/health
-http://localhost:3000/render.svg?...
+http://localhost:3000/render?from=C3&to=C5
+http://localhost:3000/render?format=png&from=C3&to=C5
 ```
 
-Use a multi-stage Docker build if useful.
-
-Example intent:
-
-```dockerfile
-FROM node:22-alpine AS build
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
-
-FROM node:22-alpine
-WORKDIR /app
-ENV NODE_ENV=production
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY --from=build /app/dist ./dist
-EXPOSE 3000
-CMD ["node", "dist/server.js"]
-```
-
-Do not blindly copy this if the selected package manager/build setup requires something different.
-
-`compose.yml` should expose port 3000 and configure restart behaviour appropriate for a simple web service.
-
-No volumes should be necessary because the service is stateless.
-
----
+No volumes are required because rendering is stateless.
 
 ## Tests
 
-At minimum test:
+Keep tests for:
 
-### Note parsing
+- note parsing and enharmonic equivalence
+- black/white key classification
+- piano geometry and 2+3 black-key repetition
+- query alignment and limits
+- `format` defaulting to SVG
+- SVG and PNG format validation
+- ignoring unknown query parameters
+- SVG output escaping and semantic structure
+- `/render` content types
+- PNG path receiving the SVG output for rasterization
+- `/render.svg` returning 404 so the removed route does not silently reappear
 
-```text
-C4 -> 60
-Db4 -> 61
-C#4 -> 61
-B3 -> 59
-```
+Server tests should inject/mock the SVG-to-PNG rasterizer rather than depending on the system binary during the Node test suite. Docker supplies the real binary in production.
 
-### Key type
+## Definition of done for the format migration
 
-Verify C, D, E, F, G, A, B are white and accidentals are black.
-
-### Geometry
-
-Verify black keys occur only after C, D, F, G, A and produce the correct 2+3 repeating grouping.
-
-### Query parsing
-
-Given:
+The migration is complete when:
 
 ```text
-chords=C|Dbmaj7|Eb6
-lh=C3,G3|Db3,Ab3|Eb3,Bb3
+/render?...                       -> SVG
+/render?format=svg&...            -> SVG
+/render?format=png&...            -> PNG
+/render.svg?...                   -> 404
 ```
 
-produce three correctly aligned diagram objects.
+and the README, API help, editor-generated URLs, tests, and Docker image all describe and support the same behavior.
 
-Reject mismatched group counts where the intended mapping is ambiguous.
-
-### SVG output
-
-Check that:
-
-- output is valid-looking SVG
-- requested title appears escaped
-- requested chord labels appear
-- correct number of keyboard groups is produced
-- requested highlighted MIDI notes appear in renderer data/classes
-
-Prefer testing semantic output/data attributes rather than brittle pixel positions wherever possible.
-
----
-
-## Helpful SVG metadata
-
-Add useful classes/data attributes to generated elements, for example:
-
-```xml
-<g class="keyboard" data-diagram-index="0">
-<rect class="key white" data-note="C3" data-midi="48" ... />
-<rect class="key black highlighted left" data-note="Db3" data-midi="49" ... />
-```
-
-This makes automated testing and future CSS/client-side interactivity much easier.
-
----
-
-## README
-
-Document:
-
-1. what the service does
-2. Docker quick start
-3. endpoint and parameters
-4. at least three copy/paste example URLs
-5. parameter encoding (`|` separates diagrams, `,` separates notes)
-6. current limitations
-
-Include examples for:
-
-- one chord
-- a three-chord progression
-- separate LH/RH highlighting
-
----
-
-## Definition of done
-
-V1 is complete when all of the following work:
-
-```bash
-docker compose up --build
-```
-
-and opening a URL equivalent to:
+A representative teaching graphic should work in both formats:
 
 ```text
-http://localhost:3000/render.svg?title=Everything%20In%20Its%20Right%20Place&subtitle=Main%20keyboard%20voicings&from=C3&to=C5&chords=C|Dbmaj7|Eb6&lh=C3,G3|Db3,Ab3|Eb3,Bb3&rh=C4,E4,G4|C4,F4,Ab4|C4,G4,Bb4&emphasize=C4
+/render?title=Everything%20In%20Its%20Right%20Place&subtitle=Main%20keyboard%20voicings&from=C3&to=C5&chords=C%7CDbmaj7%7CEb6&lh=C3,G3%7CDb3,Ab3%7CEb3,Bb3&rh=C4,E4,G4%7CC4,F4,Ab4%7CC4,G4,Bb4&emphasize=C4
 ```
 
-returns a polished single SVG containing:
-
-- title
-- subtitle
-- three correctly drawn C3-C5 piano keyboards
-- correct 2-black/3-black piano geometry
-- diagram labels C, Dbmaj7, Eb6
-- left-hand and right-hand notes highlighted distinctly
-- C4 emphasized throughout
-- note labels/legends
-- automatically calculated page height
-
-The result should be accurate enough that we can use it as a teaching aid without manually checking whether the piano keyboard itself has mutated.
-
----
-
-## Future ideas — explicitly not V1
-
-Keep the architecture friendly to these, but do not implement them unless V1 is already complete and explicitly requested:
-
-- `POST /render.svg` with JSON body
-- PNG/WebP output
-- chord name -> notes
-- automatic inversions / voice leading
-- scale diagrams
-- interval diagrams
-- guitar/fretboard diagrams
-- custom themes
-- grid/horizontal layouts
-- finger numbers
-- captions / theory notes
-- MIDI input/output
-- animated progressions
-- downloadable lesson sheets
-
-The immediate goal is a **small, stateless, deterministic, Dockerized GET-to-SVG service** that does one thing extremely reliably.
+The result must remain accurate enough to use as a teaching aid without manually checking whether the piano keyboard has mutated.
