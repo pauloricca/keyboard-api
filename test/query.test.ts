@@ -11,8 +11,12 @@ test('aligns groups, applies global emphasis, and uses defaults', () => {
   assert.equal(parse('notes=C%234').diagrams[0].notes[0].spelling, 'C#4');
   assert.equal(parse('notes=C4|&emphasize=|D4').diagrams[0].emphasize.length, 0);
 });
+test('ignores unknown query parameters', () => {
+  const request = parse('notes=C4&utm_source=chatgpt.com&whatever=hello');
+  assert.equal(request.diagrams[0].notes[0].midi, 60);
+});
 test('rejects ambiguity, invalid notes, invalid booleans, and excessive input', () => {
-  for (const query of ['chords=C|D&lh=C3', 'notes=C4,', 'notes=H4', 'notes=C2', 'from=C5&to=C3', 'from=C0', 'to=D8', 'labels=yes', 'title=a&title=b', 'unexpected=x', 'title=%00', `title=${'a'.repeat(121)}`, `chords=${Array(17).fill('C').join('|')}`, 'notes=C4|D4|E4&emphasize=C4|D4']) assert.throws(() => parse(query), query);
+  for (const query of ['chords=C|D&lh=C3', 'notes=C4,', 'notes=H4', 'notes=C2', 'from=C5&to=C3', 'from=C0', 'to=D8', 'labels=yes', 'title=a&title=b', 'title=%00', `title=${'a'.repeat(121)}`, `chords=${Array(17).fill('C').join('|')}`, 'notes=C4|D4|E4&emphasize=C4|D4']) assert.throws(() => parse(query), query);
   for (const value of ['false', '0']) assert.equal(parse(`labels=${value}`).labels, false);
   for (const value of ['true', '1']) assert.equal(parse(`labels=${value}`).labels, true);
 });

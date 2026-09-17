@@ -5,7 +5,7 @@ export function parseQuery(params: URLSearchParams): RenderRequest {
   const allowed = new Set(['title', 'subtitle', 'from', 'to', 'chords', 'notes', 'lh', 'rh', 'emphasize', 'labels']);
   if (params.toString().length > LIMITS.query) throw new Error('Query is too long');
   for (const name of params.keys()) {
-    if (!allowed.has(name)) throw new Error(`Unknown parameter: ${name}`);
+    if (!allowed.has(name)) continue;
     if (params.getAll(name).length !== 1) throw new Error(`Duplicate parameter: ${name}`);
   }
   const text = (name: string, max: number) => {
