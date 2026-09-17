@@ -76,7 +76,7 @@ function buildUrl(): string {
   for (const [mode] of modes) params.set(mode, layouts.map(l => l[mode]).join('|'));
   // Use the same validation as the HTTP API before offering a link.
   parseQuery(params);
-  return `${location.origin}/render.svg?${params}`;
+  return `${location.origin}/render?${params}`;
 }
 function syncUrl() {
   refreshPlayButtons();
