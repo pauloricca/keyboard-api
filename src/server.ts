@@ -28,15 +28,16 @@ export function buildServer(rasterize: (svg: string) => Promise<Buffer> = render
       return reply.code(400).type('application/json').send({ error: (error as Error).message });
     }
     const svg = renderSvg(parsed);
-    reply.header('Cache-Control', 'public, max-age=86400').header('X-Content-Type-Options', 'nosniff');
     if (format === 'png') {
-      try { return reply.type('image/png').send(await rasterize(svg)); }
-      catch (error) {
+      try {
+        const png = await rasterize(svg);
+        return reply.type('image/png').header('Cache-Control', 'public, max-age=86400').header('X-Content-Type-Options', 'nosniff').send(png);
+      } catch (error) {
         request.log.error({ err: error }, 'PNG conversion failed');
         return reply.code(500).type('application/json').send({ error: 'PNG conversion failed' });
       }
     }
-    return reply.type('image/svg+xml; charset=utf-8').send(svg);
+    return reply.type('image/svg+xml; charset=utf-8').header('Cache-Control', 'public, max-age=86400').header('X-Content-Type-Options', 'nosniff').send(svg);
   });
   return app;
 }
