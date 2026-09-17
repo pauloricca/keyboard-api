@@ -1,11 +1,12 @@
 import Fastify from 'fastify';
 import { pathToFileURL } from 'node:url';
-import { parseQuery, LIMITS } from './query.js';
+import { parseFormat, parseQuery, LIMITS } from './query.js';
 import { renderSvg } from './render.js';
+import { renderPng } from './png.js';
 import { readFile } from 'node:fs/promises';
 import { editorPage } from './editor-page.js';
 import { apiHelp } from './api-help.js';
-export function buildServer() {
+export function buildServer(rasterize: (svg: string) => Promise<Buffer> = renderPng) {
   const app = Fastify({ logger: true, routerOptions: { maxParamLength: LIMITS.query } });
   app.get('/', async (_request, reply) => reply.redirect('/editor'));
   app.get('/editor', async (_request, reply) => reply.type('text/html; charset=utf-8').send(editorPage));
@@ -15,13 +16,28 @@ export function buildServer() {
     return reply.type('text/javascript; charset=utf-8').send(source);
   });
   app.get('/health', async () => ({ status: 'ok' }));
-  app.get('/render.svg', async (request, reply) => {
+  app.get('/render', async (request, reply) => {
     const params = new URL(request.raw.url!, 'http://localhost').searchParams;
     if (params.size === 0) return reply.type('text/plain; charset=utf-8').header('X-Content-Type-Options', 'nosniff').send(apiHelp);
     let parsed;
-    try { parsed = parseQuery(params); }
-    catch (error) { return reply.code(400).type('application/json').send({ error: (error as Error).message }); }
-    return reply.type('image/svg+xml; charset=utf-8').header('Cache-Control', 'public, max-age=86400').header('X-Content-Type-Options', 'nosniff').send(renderSvg(parsed));
+    let format;
+    try {
+      parsed = parseQuery(params);
+      format = parseFormat(params);
+    } catch (error) {
+      return reply.code(400).type('application/json').send({ error: (error as Error).message });
+    }
+    const svg = renderSvg(parsed);
+    if (format === 'png') {
+      try {
+        const png = await rasterize(svg);
+        return reply.type('image/png').header('Cache-Control', 'public, max-age=86400').header('X-Content-Type-Options', 'nosniff').send(png);
+      } catch (error) {
+        request.log.error({ err: error }, 'PNG conversion failed');
+        return reply.code(500).type('application/json').send({ error: 'PNG conversion failed' });
+      }
+    }
+    return reply.type('image/svg+xml; charset=utf-8').header('Cache-Control', 'public, max-age=86400').header('X-Content-Type-Options', 'nosniff').send(svg);
   });
   return app;
 }

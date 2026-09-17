@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseQuery } from '../src/query.js';
-const parse = (q: string) => parseQuery(new URLSearchParams(q));
+import { parseFormat, parseQuery } from '../src/query.js';
+const params = (q: string) => new URLSearchParams(q);
+const parse = (q: string) => parseQuery(params(q));
 test('aligns groups, applies global emphasis, and uses defaults', () => {
   const request = parse('chords=C|Dbmaj7|Eb6&lh=C3,G3|Db3,Ab3|Eb3,Bb3&emphasize=C4');
   assert.equal(request.diagrams.length, 3);
@@ -10,6 +11,13 @@ test('aligns groups, applies global emphasis, and uses defaults', () => {
   assert.equal(request.from, 48); assert.equal(request.to, 72); assert.equal(request.labels, true);
   assert.equal(parse('notes=C%234').diagrams[0].notes[0].spelling, 'C#4');
   assert.equal(parse('notes=C4|&emphasize=|D4').diagrams[0].emphasize.length, 0);
+});
+test('parses render formats and defaults to svg', () => {
+  assert.equal(parseFormat(params('')), 'svg');
+  assert.equal(parseFormat(params('format=svg')), 'svg');
+  assert.equal(parseFormat(params('format=png')), 'png');
+  assert.throws(() => parse('format=webp'));
+  assert.throws(() => parse('format=svg&format=png'));
 });
 test('ignores unknown query parameters', () => {
   const request = parse('notes=C4&utm_source=chatgpt.com&whatever=hello');

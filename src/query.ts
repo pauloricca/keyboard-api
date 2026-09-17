@@ -1,13 +1,20 @@
 import { parseNote } from './notes.js';
 import type { Note, RenderRequest } from './types.js';
 export const LIMITS = { diagrams: 16, title: 120, subtitle: 200, label: 80, query: 16384 };
+export type RenderFormat = 'svg' | 'png';
+export function parseFormat(params: URLSearchParams): RenderFormat {
+  const format = params.get('format') ?? 'svg';
+  if (format !== 'svg' && format !== 'png') throw new Error('format must be svg or png');
+  return format;
+}
 export function parseQuery(params: URLSearchParams): RenderRequest {
-  const allowed = new Set(['title', 'subtitle', 'from', 'to', 'chords', 'notes', 'lh', 'rh', 'emphasize', 'labels']);
+  const allowed = new Set(['format', 'title', 'subtitle', 'from', 'to', 'chords', 'notes', 'lh', 'rh', 'emphasize', 'labels']);
   if (params.toString().length > LIMITS.query) throw new Error('Query is too long');
   for (const name of params.keys()) {
     if (!allowed.has(name)) continue;
     if (params.getAll(name).length !== 1) throw new Error(`Duplicate parameter: ${name}`);
   }
+  parseFormat(params);
   const text = (name: string, max: number) => {
     const value = params.get(name) ?? '';
     if (value.length > max || /[\u0000-\u001f\u007f-\u009f\ufffe\uffff]/u.test(value)) throw new Error(`Invalid ${name}: text is too long or contains control characters`);
